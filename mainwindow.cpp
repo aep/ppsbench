@@ -104,72 +104,74 @@ public:
 void MainWindow::update_display()
 {
     try {
-        //    auto value_target_current = sg->device->config_get (sg->key_target_current);
-        //    auto value_target_voltage = sg->device->config_get (sg->key_target_voltage);
         auto value_probe_current  = sg->device->config_get (sg->key_probe_current);
         auto value_probe_voltage  = sg->device->config_get (sg->key_probe_voltage);
-
 
         ui.display_volt->setText(QString::fromLocal8Bit(value_probe_voltage.print().c_str ()) + "V");
         ui.display_amp->setText(QString::fromLocal8Bit(value_probe_current.print().c_str ()) + "A");
 
-        if (!running)
-            return;
+        if (mode == SinkMode) {
+            //meassured curve
+            double v = QString::fromLocal8Bit(value_probe_voltage.print().c_str ()).toDouble();
+            double a = fabsl(QString::fromLocal8Bit(value_probe_current.print().c_str ()).toDouble());
 
-        //meassured curve
-        double v = QString::fromLocal8Bit(value_probe_voltage.print().c_str ()).toDouble();
-        double a = fabsl(QString::fromLocal8Bit(value_probe_current.print().c_str ()).toDouble());
+            int mV = floor(v * 1000.0);
+            int mA = floor(a * 1000.0);
 
-        int mV = floor(v * 1000.0);
-        int mA = floor(a * 1000.0);
+            printf("I:%lf U:%lf\n",  a, v);
 
-        printf("I:%lf U:%lf\n",  a, v);
+            mes_r << QPointF(a,v);
+            mes_points << QPoint(mA, mV);
+            mes << QString::number(mA) + " mA";
+            ui.chart->setData(mes_points);
+            ui.chart->setXHeaderData(mes);
 
-        mes_r << QPointF(a,v);
-        mes_points << QPoint(mA, mV);
-        mes << QString::number(mA) + " mA";
-        ui.chart->setData(mes_points);
-        ui.chart->setXHeaderData(mes);
+            //safe voltage
+            //TODO: this isn't all that safe, considered that we wait an entire second until we trigger
+            int safeMv =  floor(ui.input_safe_voltage->value() * 1000.0);
+            if (mV < safeMv) {
+                qDebug() << "safe voltage trigger";
+                stop();
+                return;
+            }
 
-        //safe voltage
-        //TODO: this isn't all that safe, considered that we wait an entire second until we trigger
-        int safeMv =  floor(ui.input_safe_voltage->value() * 1000.0);
-        if (mV < safeMv) {
-            qDebug() << "safe voltage trigger";
-            ui.groupBox_2->setEnabled(true);
-            enableOutput(false);
-            running = false;
-            return;
+            //calculate current point
+            if (cs_set_step >= cs_set_points.count()) {
+                stop();
+                return;
+            }
+            double ta = cs_set_points.at(cs_set_step++).y() / 1000.0;
+
+            qDebug() << "drawing " << a;
+            sg->device->config_set (sg->key_target_current, Glib::Variant<double>::create(ta));
+        } else if (mode == SupplyMode) {
+            double a = fabsl(QString::fromLocal8Bit(value_probe_current.print().c_str ()).toDouble());
+            int mA = floor(a * 1000.0);
+
+            qDebug() << a;
+
+            mes_r << QPointF(cs_set_step,a);
+            mes_points << QPoint(cs_set_step, mA);
+            mes << QString::number(cs_set_step);;
+            cs_set_step++;
+
+            if (cs_set_step > 15) {
+                ui.chart->setXRange(0, cs_set_step + 5);
+            }
+            ui.chart->setData(mes_points);
+            ui.chart->setXHeaderData(mes);
         }
-
-
-        //calculate current point
-        if (set_step >= set_points.count()) {
-            enableOutput(false);
-            ui.groupBox_2->setEnabled(true);
-            running = false;
-            return;
-        }
-        double ta = set_points.at(set_step++).y() / 1000.0;
-
-        qDebug() << "drawing " << a;
-        sg->device->config_set (sg->key_target_current, Glib::Variant<double>::create(ta));
 
     } catch (sigrok::Error e) {
         qDebug() << e.what();
-        enableOutput(false);
-        ui.groupBox_2->setEnabled(true);
-        running = false;
-        delete sg;
-        sg = new SigRok(QCoreApplication::arguments());
-        return;
+        stop();
     }
 }
 
 
 void MainWindow::update_set_curve() {
     //calculate set curve
-    int time      = ui.input_time->value() * 2; //500ms intervals;
+    int time      = ui.input_time->value() * 4; //250ms intervals;
     if (time == 0) {
         return;
     }
@@ -188,27 +190,28 @@ void MainWindow::update_set_curve() {
     ui.chart->setYSuffix(" mA");
 
     QList<QString> head;
-    set_points.clear();
+    cs_set_points.clear();
 
     for(int t = 0; t <= time; t++) {
-        set_points << QPoint(t , floor(startA * 1000));
+        cs_set_points << QPoint(t , floor(startA * 1000));
         head << QString::number(t);
 
         startA += step;
     }
-    ui.chart->setData(set_points);
+    ui.chart->setData(cs_set_points);
     ui.chart->setXHeaderData(head);
 }
 
 MainWindow::MainWindow() {
     ui.setupUi(this);
 
-    running = false;
-    set_step = 0;
+    mode        = IdleMode;
+    lastMode    = IdleMode;
+    cs_set_step = 0;
 
     timer = new QTimer(this);
     connect(timer, SIGNAL(timeout()), this, SLOT(update_display()));
-    timer->start(500);
+    timer->start(250);
 
     connect(ui.input_current_start, SIGNAL(valueChanged(double)), this, SLOT(update_set_curve()));
     connect(ui.input_current_end, SIGNAL(valueChanged(double)), this, SLOT(update_set_curve()));
@@ -222,14 +225,19 @@ MainWindow::MainWindow() {
 
 void MainWindow::on_pushButton_clicked(bool)
 {
-    if (set_points.count() < 1)
+    enableOutput(false);
+    if (cs_set_points.count() < 1)
         return;
-    ui.groupBox_2->setEnabled(false);
-    running = true;
+
+    mode = SinkMode;
+    lastMode = SinkMode;
+
+    ui.tabWidget->setEnabled(false);
+
     mes_points.clear();
     mes.clear();
     mes_r.clear();
-    set_step = 0;
+    cs_set_step = 0;
 
     ui.chart->setAutoFillBackground(true);
     double endA   = ui.input_current_end->value();
@@ -239,6 +247,55 @@ void MainWindow::on_pushButton_clicked(bool)
     ui.chart->setXHeaderData(QList<QString>());
     enableOutput(true);
 
+}
+
+void MainWindow::on_button_start_supply_clicked(bool)
+{
+    if (mode == IdleMode) {
+        double a = ui.input_supply_current->value();
+        double v = ui.input_supply_voltage->value();
+
+        // over 5 volt is suspecious. better double check.
+        //TODO have some warning dialog or whatever and then allow it
+        if (v > 5) {
+            return;
+        }
+
+        mes_points.clear();
+        mes.clear();
+        mes_r.clear();
+        cs_set_step = 0;
+
+        ui.button_start_supply->setText("Stop");
+        enableOutput(false);
+        mode = SupplyMode;
+        qDebug() << a << v;
+
+        sg->device->config_set (sg->key_target_voltage, Glib::Variant<double>::create(v));
+        sg->device->config_set (sg->key_target_current, Glib::Variant<double>::create(a));
+        enableOutput(true);
+        sg->device->config_set (sg->key_target_voltage, Glib::Variant<double>::create(v));
+        sg->device->config_set (sg->key_target_current, Glib::Variant<double>::create(a));
+
+        ui.chart->setAutoFillBackground(true);
+        ui.chart->setXRange(0, 20);
+        ui.chart->setYRange(0, 3000);
+        ui.chart->setYSuffix(" mA");
+    } else {
+        stop();
+        ui.button_start_supply->setText("Start");
+    }
+}
+
+
+void MainWindow::stop()
+{
+    enableOutput(false); //try this multiple times for safety
+    delete sg;
+    sg = new SigRok(QCoreApplication::arguments());
+    mode        = IdleMode;
+    ui.tabWidget->setEnabled(true);
+    cs_set_step = 0;
 }
 
 
@@ -262,7 +319,11 @@ void MainWindow::on_actionSaveCSV_triggered(bool)
     {
         QTextStream st(&f);
 
-        st << "A,V\n";
+        if (lastMode == SupplyMode) {
+            st << "t,A\n";
+        } else if (lastMode == SinkMode) {
+            st << "A,V\n";
+        }
         foreach (QPointF p, mes_r) {
             st << p.x()<< "," << p.y()<< "\n";
         }
