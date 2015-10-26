@@ -27,7 +27,13 @@ public:
 
 
         if (args.count() < 2) {
-            printf("usage: ./ppabench scpi-pps:conn=/dev/ttyUSB0:serialcomm=9600/8n1\n");
+            printf("usage: ./ppabench <driver>\n\n"
+                    "    .e.g on serialport:\n"
+                    "          ./ppabench scpi-pps:conn=/dev/ttyUSB0:serialcomm=9600/8n1\n"
+                    "    with github.com/aep/ttyline2tcp: \n"
+                    "          ./ppabench scpi-pps:conn=tcp-raw/192.168.1.14/4632\n"
+                    );
+            /*
             printf("\nSupported hardware drivers:\n");
             for (auto entry : context->drivers())
             {
@@ -36,6 +42,7 @@ public:
                         driver->name().c_str(),
                         driver->long_name().c_str());
             }
+            */
             exit(3);
         }
 
