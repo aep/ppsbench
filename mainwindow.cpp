@@ -106,14 +106,14 @@ void MainWindow::update_display()
     try {
         auto value_probe_current  = sg->device->config_get (sg->key_probe_current);
         auto value_probe_voltage  = sg->device->config_get (sg->key_probe_voltage);
+        double v = QString::fromLocal8Bit(value_probe_voltage.print().c_str ()).toDouble();
+        double a = fabsl(QString::fromLocal8Bit(value_probe_current.print().c_str ()).toDouble());
 
-        ui.display_volt->setText(QString::fromLocal8Bit(value_probe_voltage.print().c_str ()) + "V");
-        ui.display_amp->setText(QString::fromLocal8Bit(value_probe_current.print().c_str ()) + "A");
+        ui.display_volt->setText(QString().sprintf("%f V", v));
+        ui.display_amp ->setText(QString().sprintf("%f A", a));
 
         if (mode == SinkMode) {
             //meassured curve
-            double v = QString::fromLocal8Bit(value_probe_voltage.print().c_str ()).toDouble();
-            double a = fabsl(QString::fromLocal8Bit(value_probe_current.print().c_str ()).toDouble());
 
             int mV = floor(v * 1000.0);
             int mA = floor(a * 1000.0);
